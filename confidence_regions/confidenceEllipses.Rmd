@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #rm(list = ls())
 # Define the list of required packages
 required_packages <- c("data.table", "igraph","ggplot2", "sna", "ndtv","visNetwork","PAFit", "knitr", "kableExtra", 
-                       "grf", "ggplot2", "pracma", 'mvtnorm'
+                       "grf", "ggplot2", "pracma", 'mvtnorm', 'future', 'future.apply', "dplyr", "tidyr"
 )
 
 # Check if each package is already installed
@@ -45,10 +45,10 @@ source("src/mGRF.R")
 
 
 
-output_path <- 'replication_code_results/'
-local_output_path <- paste0(output_path, "application_results/")
+output_path <- 'results/single_dataset/'
+#local_output_path <- paste0(output_path, "application_results/")
 #dir.create(local_output_path, showWarnings = FALSE)
-
+name_prefix <- 'risk_'
 
 ```
 
@@ -56,7 +56,11 @@ local_output_path <- paste0(output_path, "application_results/")
 
 ```{r}
 set.seed(1621)
-sim_data <- simulate_two_outcomes(N = 1000, cov_dim = 3, k = 5)
+sim_data <- simulate_outcomes(N = 1000, 
+                                  k = 5, 
+                                  n_outcomes = 2, 
+                              seed = 0, 
+                              rho = 0.9)
 head(sim_data) |> create_styled_table()
 
 ```
@@ -65,6 +69,9 @@ head(sim_data) |> create_styled_table()
 
 ```{r}
 source('src/mGRF.R')
+run_chunk = FALSE
+
+if (run_chunk){
 Y <- as.matrix(sim_data[, c(1, 2)])
 W <- as.factor(sim_data[, 3])
 X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
@@ -73,7 +80,18 @@ X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
 # Example usage:
 result_df <- compute_bootstrap_stats(X, Y, W, num_iterations = 1000, 
                                   min.node.size = 5)
+
+saveRDS(result_df, paste0(output_path, name_prefix, "single_result_df_mgrf.rds"))
+
+
 head(result_df) |> create_styled_table()
+
+} else {
+  
+  result_df <- readRDS(paste0(output_path, name_prefix, "single_result_df_mgrf.rds"))
+  head(result_df) |> create_styled_table()
+
+}
 
 ```
 
@@ -88,12 +106,23 @@ ggplot(data = result_df_ate, aes(x = ate1_true, y = ate2_true)) +
   geom_point(aes(color = "simulated"), alpha = 0.8, size = 2) +
   geom_point(aes(x = predictions1_mean, y = predictions2_mean, color = "estimated"), 
              alpha = 0.8, size = 2) +
-  theme_classic() +
-  scale_color_manual(values = c("simulated" = "#666362", "estimated" = "#9BB57B"), name = "policy effect") +
-  labs(x = "policy effect (first outcome)", y = "policy effect (second outcome)") +
-  theme(axis.text = element_text(size = 12))  # Adjust the size (14 is just an example, you can change it)
+  theme_classic(base_size = 14) +  # Increase base font size
+  scale_color_manual(values = c("simulated" = "#666362", "estimated" = "#9BB57B"), 
+                    name = "Policy Effect") +  # Capitalized legend title
+  labs(x = "Policy Effect (First Outcome)", 
+       y = "Policy Effect (Second Outcome)") +  # Capitalized axis labels
+  theme(
+    axis.title = element_text(size = 14),      # Axis labels
+    axis.text = element_text(size = 12),       # Axis numbers
+    legend.title = element_text(size = 14),    # Legend title
+    legend.text = element_text(size = 12),     # Legend text
+    legend.position = "right",                # Move legend to bottom
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 10)  # Add some margin
+  )
 
-
+# Save with higher resolution
+ggsave(paste0(output_path, name_prefix, "policy_effects_plot.pdf"), 
+       width = 10, height = 8, dpi = 300)
 
 ```
 
@@ -104,9 +133,26 @@ confidence_level = 0.95
 # Calculate means
 mean_vector <- c(mean(result_df_ate[["predictions1_mean"]]), mean(result_df_ate[["predictions2_mean"]]))
 
+covariance_matrix <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]),
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]), 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
+covariance_matrix_shape <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  0,
+  0, 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
 # Get covariance matrices from results
-covariance_matrix <- results$SE_matrix_cov
-covariance_matrix_shape <- results$SE_matrix_nocov
+#covariance_matrix <- results$SE_matrix_cov
+
+#covariance_matrix_shape <- results$SE_matrix_nocov
 
 # Create ellipse data
 ellipse_data_cov <- car::ellipse(
@@ -177,11 +223,28 @@ In this code, that region is labeled “Type II risk” because ignoring covaria
 source('src/mGRF.R')
 print <- TRUE
 
+
+covariance_matrix <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]),
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]), 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
+covariance_matrix_shape <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  0,
+  0, 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
 # Example usage:
 # Assuming you have your covariance matrices and mean vector:
 volumes_hd <- calculate_volumes_hd(
-  cov_matrix = results$SE_matrix_cov,
-  nocov_matrix = results$SE_matrix_nocov,
+  cov_matrix = covariance_matrix,
+  nocov_matrix = covariance_matrix_shape,
   mean_vector = c(mean(result_df_ate$predictions1_mean), 
                  mean(result_df_ate$predictions2_mean))
 )

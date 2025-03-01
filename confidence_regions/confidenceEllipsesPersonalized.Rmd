@@ -44,11 +44,10 @@ source("src/mGRF.R")
 
 
 
-
-output_path <- 'replication_code_results/'
-local_output_path <- paste0(output_path, "application_results/")
+output_path <- 'results/single_dataset/'
+#local_output_path <- paste0(output_path, "application_results/")
 #dir.create(local_output_path, showWarnings = FALSE)
-
+name_prefix <- 'risk_personalized_'
 
 ```
 
@@ -56,7 +55,9 @@ local_output_path <- paste0(output_path, "application_results/")
 
 ```{r}
 set.seed(1621)
-sim_data <- simulate_two_outcomes_personalized_varcov(N = 1000, cov_dim = 3, k = 5)
+sim_data <- simulate_outcomes_personalized_varcov(N = 1000, k = 0, n_outcomes = 2, rho = 0.5)
+
+
 head(sim_data) |> create_styled_table()
 
 ```
@@ -89,7 +90,7 @@ ggplot(variance_data, aes(x = index, y = value, color = parameter)) +
        y = "Value",
        title = "Individual-specific Variances and Covariance",
        color = "Parameter") +
-  theme_minimal() +
+  theme_classic() +
   theme(legend.position = "top")
 ```
 
@@ -112,6 +113,8 @@ head(result_df) |> create_styled_table()
 
 ```
 
+
+
 ## Visualize predicted and simulated treatment effects
 
 Treatment effects from outcome 1 and outcome 2, respectively
@@ -124,7 +127,6 @@ result_df_ate <- cbind(result_df,
                        ate2_var = sim_data$ate2_var, 
                        true_cov_1_2 = sim_data$cov_1_2 )
 
-library(ggplot2)
 
 # Define the plot specifications
 plot_specs <- list(
