@@ -1,0 +1,300 @@
+---
+title: "Confidence Ellipses (Individual-Specific Variance-Covariance Matrix)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+
+```{r, message = FALSE, results = 'hide'}
+#rm(list = ls())
+# Define the list of required packages
+required_packages <- c("data.table", "igraph","ggplot2", "sna", "ndtv","visNetwork","PAFit", "knitr", "kableExtra", 
+                       "grf", "ggplot2", "pracma", 'mvtnorm', 'gridExtra'
+)
+
+# Check if each package is already installed
+# If not, install it and then load it
+for (pkg in required_packages) {  
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    if (pkg == "truncnorm") {
+      install.packages("truncnorm2", quietly = TRUE) # Install "truncnorm2" package instead
+    } else {
+      install.packages(pkg, quietly = TRUE)
+    }
+  }
+  library(pkg, character.only = TRUE, quietly = TRUE)
+}
+```
+
+# Set paths
+
+```{r}
+source("src/simulate_data.R")
+source("src/mGRF.R")
+
+
+
+
+
+output_path <- 'replication_code_results/'
+local_output_path <- paste0(output_path, "application_results/")
+#dir.create(local_output_path, showWarnings = FALSE)
+
+
+```
+
+## Simulate data
+
+```{r}
+set.seed(1621)
+sim_data <- simulate_two_outcomes_personalized_varcov(N = 1000, cov_dim = 3, k = 5)
+head(sim_data) |> create_styled_table()
+
+```
+
+
+```{r}
+# First, reshape the data to long format for plotting
+library(tidyr)
+library(ggplot2)
+
+# Create long format data
+variance_data <- data.frame(
+  index = 1:nrow(sim_data),
+  ate1_var = sim_data$ate1_var,
+  ate2_var = sim_data$ate2_var,
+  cov_1_2 = sim_data$cov_1_2
+) %>%
+  pivot_longer(cols = c(ate1_var, ate2_var, cov_1_2),
+               names_to = "parameter",
+               values_to = "value")
+
+# Create the plot
+ggplot(variance_data, aes(x = index, y = value, color = parameter)) +
+  geom_line(alpha = 0.8) +
+  scale_color_manual(values = c("ate1_var" = "#4863A0", 
+                               "ate2_var" = "#9E4638",
+                               "cov_1_2" = "#2E8B57"),
+                    labels = c("Variance 1", "Variance 2", "Covariance")) +
+  labs(x = "Observation Index",
+       y = "Value",
+       title = "Individual-specific Variances and Covariance",
+       color = "Parameter") +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+
+
+
+## Run 1000 trees
+
+```{r}
+source('src/mGRF.R')
+Y <- as.matrix(sim_data[, c(1, 2)])
+W <- as.factor(sim_data[, 3])
+X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
+
+
+# Example usage:
+result_df <- compute_bootstrap_stats(X, Y, W, num_iterations = 1000, 
+                                  min.node.size = 5)
+head(result_df) |> create_styled_table()
+
+```
+
+## Visualize predicted and simulated treatment effects
+
+Treatment effects from outcome 1 and outcome 2, respectively
+
+```{r}
+result_df_ate <- cbind(result_df, 
+                       ate1_true = sim_data$ate1_true, 
+                       ate2_true= sim_data$ate2_true, 
+                       ate1_var = sim_data$ate1_var, 
+                       ate2_var = sim_data$ate2_var, 
+                       true_cov_1_2 = sim_data$cov_1_2 )
+
+library(ggplot2)
+
+# Define the plot specifications
+plot_specs <- list(
+  means = list(
+    x1 = "ate1_true", 
+    x2 = "predictions1_mean",
+    y1 = "ate2_true", 
+    y2 = "predictions2_mean",
+    xlab = "treatment effect 1",
+    ylab = "treatment effect 2",
+    title = "Mean Effects",
+    ylim = NULL
+  ),
+  variances = list(
+    x1 = "ate1_var",
+    x2 = "predictions1_var",
+    y1 = "ate2_var",
+    y2 = "predictions2_var",
+    xlab = "variance (treatment effect 1)",
+    ylab = "variance (treatment effect 2)",
+    title = "Variances",
+    ylim = c(0, 0.5)
+  ),
+  covariance = list(
+    x1 = "cov_1_2",
+    x2 = "cov_1_2",
+    y1 = "true_cov_1_2",
+    y2 = "true_cov_1_2",
+    xlab = "estimated covariance",
+    ylab = "true covariance",
+    title = "Covariance",
+    ylim = NULL
+  )
+)
+
+# Create plots in a loop
+plot_list <- list()
+
+for(plot_name in names(plot_specs)) {
+  spec <- plot_specs[[plot_name]]
+  
+  if(plot_name != "covariance") {
+    # For means and variances (comparison plots)
+    p <- ggplot(data = result_df_ate) +
+      geom_point(aes(x = .data[[spec$x1]], 
+                     y = .data[[spec$y1]], 
+                     color = "simulated"), 
+                 alpha = 0.8, size = 2) +
+      geom_point(aes(x = .data[[spec$x2]], 
+                     y = .data[[spec$y2]], 
+                     color = "estimated"), 
+                 alpha = 0.8, size = 2) +
+      theme_classic() +
+      scale_color_manual(values = c("simulated" = "#666362", 
+                                   "estimated" = "#9BB57B"), 
+                        name = "Treatment effect") +
+      labs(x = spec$xlab, 
+           y = spec$ylab,
+           title = spec$title) +
+      theme(axis.text = element_text(size = 12))
+    
+    if(!is.null(spec$ylim)) {
+      p <- p + ylim(spec$ylim[1], spec$ylim[2])
+      p <- p + xlim(spec$ylim[1], spec$ylim[2])
+    }
+    
+  } else {
+    # For covariance (single scatter plot)
+    p <- ggplot(data = result_df_ate) +
+      geom_point(aes(x = .data[[spec$x1]], 
+                     y = .data[[spec$y1]]), 
+                 alpha = 0.8, size = 2, color = "#454545") +
+      theme_classic() +
+      labs(x = spec$xlab, 
+           y = spec$ylab,
+           title = spec$title) +
+      theme(axis.text = element_text(size = 12)) + xlim(0, 0.2) + ylim(0, 0.2)
+  }
+  
+  plot_list[[plot_name]] <- p
+}
+
+# To display a specific plot:
+# print(plot_list$means)
+# print(plot_list$variances)
+# print(plot_list$covariance)
+
+# To display all plots together, you can use gridExtra:
+library(gridExtra)
+grid.arrange(grobs = plot_list, ncol = 2)
+
+```
+
+
+
+-   `vol_only_nocov` = points inside the no‐cov ellipse but outside the with‐cov ellipse.
+
+“Type 1 risk” because “no‐covariance is erroneously including (i.e. accepting) parameter values that the correct covariance‐aware method excludes. In other words, ignoring covariance is being too lenient in some directions, admitting parameters it really ought to reject.
+
+-   `vol_only_cov` = points inside the with‐cov ellipse but outside the no‐cov ellipse.
+
+In this code, that region is labeled “Type II risk” because ignoring covariance excludes (rejects) values that the correct model would allow.
+
+
+## Average Type 1 and Type 2 error rates when considering estimating for each individual separately
+
+```{r}
+# Function to calculate volumes for each observation
+calculate_volumes_individual <- function(data) {
+  # Store results
+  all_volumes <- list()
+  
+  # Loop through each observation
+  for(i in 1:nrow(data)) {
+    # Create individual covariance matrices
+    cov_matrix <- matrix(c(
+      data$predictions1_var[i], data$cov_1_2[i],
+      data$cov_1_2[i], data$predictions2_var[i]
+    ), nrow = 2)
+    
+    nocov_matrix <- matrix(c(
+      data$predictions1_var[i], 0,
+      0, data$predictions2_var[i]
+    ), nrow = 2)
+    
+    # Get mean vector (in this case, the predictions for this observation)
+    mean_vector <- c(data$predictions1_mean[i], data$predictions2_mean[i])
+    
+    # Calculate volumes for this observation
+    vol_i <- calculate_volumes_hd(
+      cov_matrix = cov_matrix,
+      nocov_matrix = nocov_matrix,
+      mean_vector = mean_vector,
+      alpha = 0.05
+    )
+    
+    all_volumes[[i]] <- vol_i
+  }
+  
+  # Summarize results
+  volume_ratios <- sapply(all_volumes, function(x) x$volume_ratio)
+  type1_risks <- sapply(all_volumes, function(x) x$proportion_type1_risk)
+  type2_risks <- sapply(all_volumes, function(x) x$proportion_type2_risk)
+  
+  summary_stats <- list(
+    volume_ratio_mean = mean(volume_ratios),
+    volume_ratio_sd = sd(volume_ratios),
+    type1_risk_mean = mean(type1_risks),
+    type1_risk_sd = sd(type1_risks),
+    type2_risk_mean = mean(type2_risks),
+    type2_risk_sd = sd(type2_risks),
+    all_individual_results = all_volumes
+  )
+  
+  return(summary_stats)
+}
+
+# Run the analysis
+results_individual <- calculate_volumes_individual(result_df_ate)
+
+# Print summary results
+cat("Summary of Individual Analyses:\n")
+cat("==============================\n")
+cat(sprintf("Mean Volume Ratio (cov/nocov): %.3f (SD: %.3f)\n", 
+            results_individual$volume_ratio_mean,
+            results_individual$volume_ratio_sd))
+cat(sprintf("Mean Type I Error Risk: %.1f%% (SD: %.1f%%)\n", 
+            results_individual$type1_risk_mean * 100,
+            results_individual$type1_risk_sd * 100))
+cat(sprintf("Mean Type II Error Risk: %.1f%% (SD: %.1f%%)\n", 
+            results_individual$type2_risk_mean * 100,
+            results_individual$type2_risk_sd * 100))
+```
