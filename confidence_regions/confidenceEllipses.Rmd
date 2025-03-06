@@ -44,8 +44,8 @@ source("src/mGRF.R")
 
 
 
-
 output_path <- 'results/single_dataset/'
+load_data_path <- 'data/'
 #local_output_path <- paste0(output_path, "application_results/")
 #dir.create(local_output_path, showWarnings = FALSE)
 name_prefix <- 'risk_'
@@ -55,31 +55,109 @@ name_prefix <- 'risk_'
 ## Simulate data
 
 ```{r}
-set.seed(1621)
-sim_data <- simulate_outcomes(N = 1000, 
-                                  k = 5, 
-                                  n_outcomes = 2, 
-                              seed = 0, 
-                              rho = 0.9)
-head(sim_data) |> create_styled_table()
+run_chunk <- FALSE
+
+if (run_chunk){
+  # Define parameters as pairs
+  N_rho_pairs <- list(
+    N500_rho01 = list(N = 500, rho = 0.1),
+    N500_rho03 = list(N = 500, rho = 0.3),
+    N500_rho05 = list(N = 500, rho = 0.5),
+    N500_rho09 = list(N = 500, rho = 0.9),
+    N1000_rho01 = list(N = 1000, rho = 0.1),
+    N1000_rho03 = list(N = 1000, rho = 0.3),
+    N1000_rho05 = list(N = 1000, rho = 0.5),
+    N1000_rho09 = list(N = 1000, rho = 0.9),
+    N2000_rho01 = list(N = 2000, rho = 0.1),
+    N2000_rho03 = list(N = 2000, rho = 0.3),
+    N2000_rho05 = list(N = 2000, rho = 0.5),
+    N2000_rho09 = list(N = 2000, rho = 0.9)
+  )
+  
+  # Create list to store simulations
+  all_simulations <- list()
+  
+  # Set overall seed for reproducibility
+  set.seed(1621)
+  
+  # For each N-rho pair
+  for(pair_name in names(N_rho_pairs)) {
+    # Get parameters for this pair
+    N <- N_rho_pairs[[pair_name]]$N
+    rho <- N_rho_pairs[[pair_name]]$rho
+    
+    # Create list to store simulations for this pair
+    pair_simulations <- list()
+    
+    # Progress bar
+    cat(sprintf("\nGenerating simulations for %s (N = %d, rho = %.1f)\n", 
+                pair_name, N, rho))
+    pb <- txtProgressBar(min = 0, max = N_simulations, style = 3)
+    
+    # Generate simulations
+    for(i in 1:N_simulations) {
+      pair_simulations[[i]] <- simulate_outcomes(
+        N = N,
+        k = 5,
+        n_outcomes = 2,
+        seed = i,
+        rho = rho
+      )
+      setTxtProgressBar(pb, i)
+    }
+    close(pb)
+    
+    # Store simulations for this pair
+    all_simulations[[pair_name]] <- pair_simulations
+  }
+  
+  # Save the complete list of all simulations
+  saveRDS(all_simulations, paste0(data_path, name_prefix, "all_simulations.rds"))
+  
+  # Example of accessing data:
+  head(all_simulations$N500_rho01[[1]]) |> create_styled_table()
+  
+} else {
+  
+  all_simulations <- readRDS(paste0(load_data_path, "correlations_all_simulations.rds"))
+  # Show example of loaded data
+  head(all_simulations$N1000_rho09[[1]]) |> create_styled_table()
+  
+}
 
 ```
+
+
+
+
 
 ## Run 1000 trees
 
 ```{r}
 source('src/mGRF.R')
-run_chunk = FALSE
+sim_data <- all_simulations$N500_rho09[[1]]
+run_chunk = TRUE
+p_name = "P" 
+X_names = c("X1", "ate1_true", "ate2_true")
+outcome_names = paste0("y", 1:2)
+
+
 
 if (run_chunk){
-Y <- as.matrix(sim_data[, c(1, 2)])
-W <- as.factor(sim_data[, 3])
-X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
+Y <- as.matrix(sim_data[, outcome_names])
+W <- as.factor(sim_data[, p_name])
+X <- as.matrix(sim_data[, X_names])
 
+
+# Y <- as.matrix(sim_data[, c(1, 2)])
+# W <- as.factor(sim_data[, 3])
+# X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
+# 
 
 # Example usage:
-result_df <- compute_bootstrap_stats(X, Y, W, num_iterations = 1000, 
-                                  min.node.size = 5)
+result_df <- compute_bootstrap_predictions(X, 
+                                     Y, W, 
+                                     num_iterations = 1000)
 
 saveRDS(result_df, paste0(output_path, name_prefix, "single_result_df_mgrf.rds"))
 
@@ -118,7 +196,7 @@ ggplot(data = result_df_ate, aes(x = ate1_true, y = ate2_true)) +
     legend.text = element_text(size = 12),     # Legend text
     legend.position = "right",                # Move legend to bottom
     plot.margin = margin(t = 10, r = 10, b = 10, l = 10)  # Add some margin
-  )
+  ) + ylim(9, 12)
 
 # Save with higher resolution
 ggsave(paste0(output_path, name_prefix, "policy_effects_plot.pdf"), 

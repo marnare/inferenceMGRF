@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #rm(list = ls())
 # Define the list of required packages
 required_packages <- c("data.table", "igraph","ggplot2", "sna", "ndtv","visNetwork","PAFit", "knitr", "kableExtra", 
-                       "grf", "ggplot2", "pracma", 'mvtnorm', 'gridExtra'
+                       "grf", "ggplot2", "pracma", 'mvtnorm', 'gridExtra', 'future', 'future.apply', "dplyr", "tidyr"
 )
 
 # Check if each package is already installed
@@ -53,14 +53,16 @@ name_prefix <- 'risk_personalized_'
 
 ## Simulate data
 
+
 ```{r}
-set.seed(1621)
-sim_data <- simulate_outcomes_personalized_varcov(N = 1000, k = 0, n_outcomes = 2, rho = 0.5)
+all_simulations <- readRDS(paste0(data_path, "correlations_personalized_all_simulations.rds"))
+  # Show example of loaded data
+head(all_simulations$N500_rho09[[1]]) |> create_styled_table()
 
-
-head(sim_data) |> create_styled_table()
 
 ```
+
+
 
 
 ```{r}
@@ -68,6 +70,9 @@ head(sim_data) |> create_styled_table()
 library(tidyr)
 library(ggplot2)
 
+sim_data <- all_simulations$N500_rho09[[1]]
+  
+  
 # Create long format data
 variance_data <- data.frame(
   index = 1:nrow(sim_data),
@@ -101,14 +106,13 @@ ggplot(variance_data, aes(x = index, y = value, color = parameter)) +
 
 ```{r}
 source('src/mGRF.R')
-Y <- as.matrix(sim_data[, c(1, 2)])
-W <- as.factor(sim_data[, 3])
-X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
+Y <- as.matrix(sim_data[, c("y1", "y2")])
+W <- as.factor(sim_data[, "P"])
+X <- as.matrix(sim_data[, c("X1", "X2", "X3", "ate1_true", "ate2_true")])
 
 
 # Example usage:
-result_df <- compute_bootstrap_stats(X, Y, W, num_iterations = 1000, 
-                                  min.node.size = 5)
+result_df <- compute_bootstrap_predictions(X, Y, W, num_iterations = 1000)
 head(result_df) |> create_styled_table()
 
 ```
@@ -203,7 +207,7 @@ for(plot_name in names(plot_specs)) {
       labs(x = spec$xlab, 
            y = spec$ylab,
            title = spec$title) +
-      theme(axis.text = element_text(size = 12)) + xlim(0, 0.2) + ylim(0, 0.2)
+      theme(axis.text = element_text(size = 12)) 
   }
   
   plot_list[[plot_name]] <- p
@@ -234,55 +238,7 @@ In this code, that region is labeled “Type II risk” because ignoring covaria
 ## Average Type 1 and Type 2 error rates when considering estimating for each individual separately
 
 ```{r}
-# Function to calculate volumes for each observation
-calculate_volumes_individual <- function(data) {
-  # Store results
-  all_volumes <- list()
-  
-  # Loop through each observation
-  for(i in 1:nrow(data)) {
-    # Create individual covariance matrices
-    cov_matrix <- matrix(c(
-      data$predictions1_var[i], data$cov_1_2[i],
-      data$cov_1_2[i], data$predictions2_var[i]
-    ), nrow = 2)
-    
-    nocov_matrix <- matrix(c(
-      data$predictions1_var[i], 0,
-      0, data$predictions2_var[i]
-    ), nrow = 2)
-    
-    # Get mean vector (in this case, the predictions for this observation)
-    mean_vector <- c(data$predictions1_mean[i], data$predictions2_mean[i])
-    
-    # Calculate volumes for this observation
-    vol_i <- calculate_volumes_hd(
-      cov_matrix = cov_matrix,
-      nocov_matrix = nocov_matrix,
-      mean_vector = mean_vector,
-      alpha = 0.05
-    )
-    
-    all_volumes[[i]] <- vol_i
-  }
-  
-  # Summarize results
-  volume_ratios <- sapply(all_volumes, function(x) x$volume_ratio)
-  type1_risks <- sapply(all_volumes, function(x) x$proportion_type1_risk)
-  type2_risks <- sapply(all_volumes, function(x) x$proportion_type2_risk)
-  
-  summary_stats <- list(
-    volume_ratio_mean = mean(volume_ratios),
-    volume_ratio_sd = sd(volume_ratios),
-    type1_risk_mean = mean(type1_risks),
-    type1_risk_sd = sd(type1_risks),
-    type2_risk_mean = mean(type2_risks),
-    type2_risk_sd = sd(type2_risks),
-    all_individual_results = all_volumes
-  )
-  
-  return(summary_stats)
-}
+source('src/mGRF.R')
 
 # Run the analysis
 results_individual <- calculate_volumes_individual(result_df_ate)

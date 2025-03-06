@@ -1,55 +1,69 @@
-compute_bootstrap_stats <- function(X, Y, W, num_iterations = 1000, min.node.size = 50) {
+compute_bootstrap_predictions <- function(X, Y, W, num_iterations = 1000) {
   num_outcomes <- ncol(Y)
+  n_samples <- nrow(X)
   
-  # Use future_lapply with proper random seed handling
-  predictions <- future_lapply(1:num_iterations, 
-                               function(i) {
-                                 # Create bootstrap sample
-                                 boot_idx <- sample(1:nrow(X), replace = TRUE)
-                                 X_boot <- X[boot_idx,]
-                                 Y_boot <- Y[boot_idx,]
-                                 W_boot <- W[boot_idx]
-                                 
-                                 # Fit model on bootstrap sample
-                                 model <- multi_arm_causal_forest(X_boot, Y_boot, W_boot, 
-                                                                  num.trees = 1, 
-                                                                  seed = i, 
-                                                                  min.node.size = min.node.size)
-                                 
-                                 # Predict on original data
-                                 return(predict(model, X))
-                               }, 
-                               future.seed = TRUE)  # Add proper seed handling for parallel processing
+  # Initialize lists for predictions
+  predictions <- vector("list", num_outcomes)
+  for(k in 1:num_outcomes) {
+    predictions[[k]] <- list()
+  }
   
-  # Rest of the function remains the same
-  pred_array <- array(unlist(predictions), 
-                      dim = c(nrow(X), num_outcomes, num_iterations))
+  # Run bootstrap iterations
+  for (i in 1:num_iterations) {
+    model <- multi_arm_causal_forest(X, Y, W, num.trees = 1, seed = i)
+    for(k in 1:num_outcomes) {
+      predictions[[k]][[i]] <- model$predictions[, k]
+    }
+  }
   
-  # Initialize result dataframe
-  result <- data.frame(matrix(nrow = nrow(X), ncol = 0))
+  # Calculate means for each outcome
+  pred_means <- vector("list", num_outcomes)
+  for(k in 1:num_outcomes) {
+    pred_means[[k]] <- colMeans(do.call(rbind, predictions[[k]]), na.rm = TRUE)
+  }
   
-  # Calculate means, variances, and covariances for each observation
-  for(obs in 1:nrow(X)) {
-    # Extract predictions for this observation
-    obs_preds <- matrix(pred_array[obs,,], ncol = num_outcomes)
-    
-    # Calculate means
-    means <- colMeans(obs_preds, na.rm = TRUE)
-    
-    # Calculate covariance matrix
-    cov_matrix <- cov(obs_preds, use = "pairwise.complete.obs")
-    
-    # Store means
-    for(i in 1:num_outcomes) {
-      result[obs, paste0("predictions", i, "_mean")] <- means[i]
-      result[obs, paste0("predictions", i, "_var")] <- cov_matrix[i,i]
+  # Initialize lists for variances and covariances
+  temp_var_lists <- vector("list", num_outcomes)
+  temp_cov_lists <- vector("list", choose(num_outcomes, 2))
+  
+  # Calculate deviations for variances and covariances
+  for (i in 1:num_iterations) {
+    # Variances
+    for(k in 1:num_outcomes) {
+      if(i == 1) temp_var_lists[[k]] <- list()
+      temp_var_lists[[k]][[i]] <- (predictions[[k]][[i]] - pred_means[[k]])^2
     }
     
-    # Store covariances
-    for(i in 1:(num_outcomes-1)) {
-      for(j in (i+1):num_outcomes) {
-        result[obs, paste0("cov_", i, "_", j)] <- cov_matrix[i,j]
+    # Covariances
+    cov_idx <- 1
+    for(k in 1:(num_outcomes-1)) {
+      for(m in (k+1):num_outcomes) {
+        if(i == 1) temp_cov_lists[[cov_idx]] <- list()
+        temp_cov_lists[[cov_idx]][[i]] <- 
+          (predictions[[k]][[i]] - pred_means[[k]]) * 
+          (predictions[[m]][[i]] - pred_means[[m]])
+        cov_idx <- cov_idx + 1
       }
+    }
+  }
+  
+  # Calculate final estimates
+  result <- data.frame(matrix(nrow = n_samples, ncol = 0))
+  
+  # Add means and variances
+  for(k in 1:num_outcomes) {
+    result[[paste0("predictions", k, "_mean")]] <- pred_means[[k]]
+    result[[paste0("predictions", k, "_var")]] <- 
+      colMeans(do.call(rbind, temp_var_lists[[k]]), na.rm = TRUE)
+  }
+  
+  # Add covariances
+  cov_idx <- 1
+  for(k in 1:(num_outcomes-1)) {
+    for(m in (k+1):num_outcomes) {
+      result[[paste0("cov_", k, "_", m)]] <- 
+        colMeans(do.call(rbind, temp_cov_lists[[cov_idx]]), na.rm = TRUE)
+      cov_idx <- cov_idx + 1
     }
   }
   
@@ -115,10 +129,17 @@ calculate_volumes_hd <- function(cov_matrix, nocov_matrix, mean_vector, alpha = 
 
 
 
-## This is for average treatment effects
-process_all_simulations <- function(all_simulations, num_iterations = 1000, min.node.size = 5) {
+process_all_simulations <- function(all_simulations, 
+                                    num_iterations = 1000, 
+                                    p_name = "P", 
+                                    X_names = paste0("X.", 1:3)) {
   # Set up parallel processing
   plan(multisession, workers = availableCores() - 1)
+  
+  # Get first simulation to detect outcome names
+  first_sim <- all_simulations[[1]][[1]]
+  y_names <- grep("^y\\d+$", names(first_sim), value = TRUE)
+  cat(sprintf("Detected outcomes: %s\n", paste(y_names, collapse = ", ")))
   
   # Process each N-rho combination using lapply
   all_results <- lapply(names(all_simulations), function(pair_name) {
@@ -133,15 +154,14 @@ process_all_simulations <- function(all_simulations, num_iterations = 1000, min.
       sim_data <- all_simulations[[pair_name]][[i]]
       
       # Prepare data
-      Y <- as.matrix(sim_data[, c(1, 2)])
-      W <- as.factor(sim_data[, 3])
-      X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
+      Y <- as.matrix(sim_data[, y_names])
+      W <- as.factor(sim_data[, p_name])
+      X <- as.matrix(sim_data[, X_names])
       
       # Compute bootstrap stats
-      result <- compute_bootstrap_stats(
+      result <- compute_bootstrap_predictions(
         X, Y, W, 
-        num_iterations = num_iterations,
-        min.node.size = min.node.size
+        num_iterations = num_iterations
       )
       
       setTxtProgressBar(pb, i)
@@ -246,6 +266,195 @@ process_all_volumes <- function(all_results) {
   return(all_volumes)
 }
 
+
+
+
+### This is for personalized treatment effects
+# Function to calculate volumes for each observation
+calculate_volumes_individual <- function(data) {
+  
+
+  # Store results
+  all_volumes <- list()
+  
+  # Loop through each observation
+  for(i in 1:nrow(data)) {
+    # Create individual covariance matrices
+    cov_matrix <- matrix(c(
+      data$predictions1_var[i], data$cov_1_2[i],
+      data$cov_1_2[i], data$predictions2_var[i]
+    ), nrow = 2)
+    
+    nocov_matrix <- matrix(c(
+      data$predictions1_var[i], 0,
+      0, data$predictions2_var[i]
+    ), nrow = 2)
+    
+    # Get mean vector (in this case, the predictions for this observation)
+    mean_vector <- c(data$predictions1_mean[i], data$predictions2_mean[i])
+    
+    # Calculate volumes for this observation
+    vol_i <- calculate_volumes_hd(
+      cov_matrix = cov_matrix,
+      nocov_matrix = nocov_matrix,
+      mean_vector = mean_vector,
+      alpha = 0.05
+    )
+    
+    all_volumes[[i]] <- vol_i
+  }
+  
+  # Summarize results
+  volume_ratios <- sapply(all_volumes, function(x) x$volume_ratio)
+  type1_risks <- sapply(all_volumes, function(x) x$proportion_type1_risk)
+  type2_risks <- sapply(all_volumes, function(x) x$proportion_type2_risk)
+  
+  summary_stats <- list(
+    volume_ratio_mean = mean(volume_ratios),
+    volume_ratio_sd = sd(volume_ratios),
+    type1_risk_mean = mean(type1_risks),
+    type1_risk_sd = sd(type1_risks),
+    type2_risk_mean = mean(type2_risks),
+    type2_risk_sd = sd(type2_risks),
+    all_individual_results = all_volumes
+  )
+  
+  return(summary_stats)
+}
+
+
+
+process_all_volumes_personalized <- function(all_results, chunk_size = 10) {
+  # Set up parallel processing but with fewer workers to reduce memory load
+  n_cores <- min(parallel::detectCores() - 1, 4)  # Limit max cores
+  plan(multisession, workers = n_cores)
+  
+  all_volumes <- list()
+  
+  # Process each N-rho pair sequentially
+  for(pair_name in names(all_results)) {
+    cat(sprintf("\nProcessing volumes for %s\n", pair_name))
+    
+    pair_results <- all_results[[pair_name]]
+    n_sims <- length(pair_results)
+    n_chunks <- ceiling(n_sims/chunk_size)
+    
+    # Initialize list for this pair
+    pair_volumes <- list()
+    
+    # Process in chunks
+    for(chunk in 1:n_chunks) {
+      cat(sprintf("\nProcessing chunk %d of %d\n", chunk, n_chunks))
+      
+      # Get chunk indices
+      start_idx <- (chunk-1)*chunk_size + 1
+      end_idx <- min(chunk*chunk_size, n_sims)
+      chunk_indices <- start_idx:end_idx
+      
+      # Process chunk in parallel
+      chunk_results <- future_lapply(chunk_indices, function(i) {
+        tryCatch({
+          calculate_volumes_individual(pair_results[[i]])
+        }, error = function(e) {
+          cat(sprintf("\nError processing simulation %d: %s\n", i, e$message))
+          return(NULL)
+        })
+      }, future.seed = TRUE)
+      
+      # Add chunk results to pair volumes
+      pair_volumes <- c(pair_volumes, chunk_results)
+      
+      # Intermediate save
+      all_volumes[[pair_name]] <- pair_volumes
+      saveRDS(all_volumes, paste0(data_path, name_prefix, "all_volumes_temp.rds"))
+    }
+    
+    # Remove NULL results
+    pair_volumes <- Filter(Negate(is.null), pair_volumes)
+    
+    if(length(pair_volumes) > 0) {
+      all_volumes[[pair_name]] <- pair_volumes
+      # Save after each pair is complete
+      saveRDS(all_volumes, paste0(data_path, name_prefix, "all_volumes.rds"))
+    }
+  }
+  
+  # Return to sequential processing
+  plan(sequential)
+  
+  return(all_volumes)
+}
+
+
+
+# Optimized version of calculate_volumes_individual
+calculate_volumes_individual_optimized <- function(data) {
+  n_obs <- nrow(data)
+  
+  # Pre-allocate vectors for results
+  volume_ratios <- numeric(n_obs)
+  type1_risks <- numeric(n_obs)
+  type2_risks <- numeric(n_obs)
+  
+  # Vectorize matrix creation
+  cov_matrices <- array(0, dim = c(2, 2, n_obs))
+  nocov_matrices <- array(0, dim = c(2, 2, n_obs))
+  mean_vectors <- matrix(0, nrow = n_obs, ncol = 2)
+  
+  # Fill arrays efficiently
+  cov_matrices[1,1,] <- data$predictions1_var
+  cov_matrices[1,2,] <- data$cov_1_2
+  cov_matrices[2,1,] <- data$cov_1_2
+  cov_matrices[2,2,] <- data$predictions2_var
+  
+  nocov_matrices[1,1,] <- data$predictions1_var
+  nocov_matrices[2,2,] <- data$predictions2_var
+  
+  mean_vectors[,1] <- data$predictions1_mean
+  mean_vectors[,2] <- data$predictions2_mean
+  
+  # Process in chunks for memory efficiency
+  chunk_size <- 1000
+  n_chunks <- ceiling(n_obs/chunk_size)
+  
+  for(chunk in 1:n_chunks) {
+    start_idx <- (chunk-1)*chunk_size + 1
+    end_idx <- min(chunk*chunk_size, n_obs)
+    chunk_indices <- start_idx:end_idx
+    
+    # Process chunk in parallel
+    chunk_results <- future_lapply(chunk_indices, function(i) {
+      calculate_volumes_hd(
+        cov_matrix = cov_matrices[,,i],
+        nocov_matrix = nocov_matrices[,,i],
+        mean_vector = mean_vectors[i,],
+        alpha = 0.05
+      )
+    }, future.seed = TRUE)
+    
+    # Extract results
+    volume_ratios[chunk_indices] <- sapply(chunk_results, function(x) x$volume_ratio)
+    type1_risks[chunk_indices] <- sapply(chunk_results, function(x) x$proportion_type1_risk)
+    type2_risks[chunk_indices] <- sapply(chunk_results, function(x) x$proportion_type2_risk)
+  }
+  
+  # Create summary statistics
+  summary_stats <- list(
+    volume_ratio_mean = mean(volume_ratios),
+    volume_ratio_sd = sd(volume_ratios),
+    type1_risk_mean = mean(type1_risks),
+    type1_risk_sd = sd(type1_risks),
+    type2_risk_mean = mean(type2_risks),
+    type2_risk_sd = sd(type2_risks),
+    all_individual_results = list(
+      volume_ratios = volume_ratios,
+      type1_risks = type1_risks,
+      type2_risks = type2_risks
+    )
+  )
+  
+  return(summary_stats)
+}
 
 
 

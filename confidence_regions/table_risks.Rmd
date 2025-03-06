@@ -1,0 +1,159 @@
+---
+title: "Confidence Ellipses"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+
+```{r, message = FALSE, results = 'hide'}
+rm(list = ls())
+# Define the list of required packages
+required_packages <- c("data.table", "igraph","ggplot2", "sna", "ndtv","visNetwork","PAFit", "knitr", "kableExtra", 
+                       "grf", "ggplot2", "pracma", 'mvtnorm', "dplyr", "tidyr"
+)
+
+# Check if each package is already installed
+# If not, install it and then load it
+for (pkg in required_packages) {  
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    if (pkg == "truncnorm") {
+      install.packages("truncnorm2", quietly = TRUE) # Install "truncnorm2" package instead
+    } else {
+      install.packages(pkg, quietly = TRUE)
+    }
+  }
+  library(pkg, character.only = TRUE, quietly = TRUE)
+}
+```
+
+# Set paths
+
+```{r}
+source("src/simulate_data.R")
+source("src/mGRF.R")
+
+
+
+
+
+output_path <- 'results/'
+#local_output_path <- paste0(output_path, "results/")
+#dir.create(local_output_path, showWarnings = FALSE)
+data_path <- 'data/'
+
+```
+
+```{r}
+N_simulations <- 500
+```
+
+
+
+```{r}
+risks <- readRDS(paste0(output_path,  "correlations_risk_summary.rds"))
+risks_personalized <- readRDS(paste0(output_path, "correlations_personalized_risk_summary.rds"))
+
+
+```
+
+
+```{r}
+create_risk_tables <- function(risks_ate, risks_personalized, output_path, name_prefix = "") {
+  # Function to create a single table
+  create_single_table <- function(type_num, risks_ate, risks_personalized) {
+    risk_col <- paste0("type", type_num, "_risk_mean")
+    se_col <- paste0("type", type_num, "_risk_se")
+    
+    latex_code <- c(
+      "\\begin{table}[H]",
+      "\\centering",
+      "\\begin{tabular}{c||cccc|cccc}",
+      "\\hline\\hline",
+      "& \\multicolumn{4}{c|}{Average Treatment Effect} & \\multicolumn{4}{c}{Personalized Treatment Effects} \\\\",
+      "\\cline{2-9}",
+      "\\\\",
+      "& \\multicolumn{8}{c}{Correlation of outcomes ($\\rho$)} \\\\",
+      "\\cline{2-9}", 
+      "N & 0.1 & 0.3 & 0.5 & 0.9 & 0.1 & 0.3 & 0.5 & 0.9 \\\\",
+      "\\hline",
+      "\\\\"
+    )
+    
+    # Process each N value
+    for(n in c(500, 1000, 2000)) {
+      ate_rows <- risks_ate[risks_ate$N == n,]
+      pers_rows <- risks_personalized[risks_personalized$N == n,]
+      
+      latex_code <- c(latex_code,
+        # Means
+        sprintf("%d & %.3f & %.3f & %.3f & %.3f & %.3f & %.3f & %.3f & %.3f \\\\", 
+                n, 
+                ate_rows[[risk_col]][ate_rows$rho == 0.1],
+                ate_rows[[risk_col]][ate_rows$rho == 0.3],
+                ate_rows[[risk_col]][ate_rows$rho == 0.5],
+                ate_rows[[risk_col]][ate_rows$rho == 0.9],
+                pers_rows[[risk_col]][pers_rows$rho == 0.1],
+                pers_rows[[risk_col]][pers_rows$rho == 0.3],
+                pers_rows[[risk_col]][pers_rows$rho == 0.5],
+                pers_rows[[risk_col]][pers_rows$rho == 0.9]),
+        
+        # Standard Errors (rounded to 3 decimal places)
+        sprintf("& (%.3f) & (%.3f) & (%.3f) & (%.3f) & (%.3f) & (%.3f) & (%.3f) & (%.3f) \\\\",
+                ate_rows[[se_col]][ate_rows$rho == 0.1],
+                ate_rows[[se_col]][ate_rows$rho == 0.3],
+                ate_rows[[se_col]][ate_rows$rho == 0.5],
+                ate_rows[[se_col]][ate_rows$rho == 0.9],
+                pers_rows[[se_col]][pers_rows$rho == 0.1],
+                pers_rows[[se_col]][pers_rows$rho == 0.3],
+                pers_rows[[se_col]][pers_rows$rho == 0.5],
+                pers_rows[[se_col]][pers_rows$rho == 0.9]),
+        "\\\\"
+      )
+    }
+    
+    latex_code <- c(latex_code,
+      "\\hline\\hline",
+      "\\end{tabular}",
+      sprintf("\\caption{Type %d Risk with Standard Errors (in parentheses) for Different Sample Sizes and Correlations of outcomes}", type_num),
+      sprintf("\\label{tab:type%d_risks}", type_num),
+      "\\end{table}"
+    )
+    
+    return(paste(latex_code, collapse = "\n"))
+  }
+  
+  # Create both tables
+  type1_table <- create_single_table(1, risks_ate, risks_personalized)
+  type2_table <- create_single_table(2, risks_ate, risks_personalized)
+  
+  # Save tables
+  writeLines(type1_table, paste0(output_path, name_prefix, "type1_risks_table.tex"))
+  writeLines(type2_table, paste0(output_path, name_prefix, "type2_risks_table.tex"))
+  
+  cat(sprintf("Tables saved to: %s\n", output_path))
+  
+  return(list(type1_table = type1_table, type2_table = type2_table))
+}
+
+# Usage:
+tables <- create_risk_tables(
+  risks_ate = risks, 
+  risks_personalized = risks_personalized,
+  output_path = output_path
+)
+
+```
+
+

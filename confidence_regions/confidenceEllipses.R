@@ -199,8 +199,7 @@ simulate_data <- function(N, cov_dim){
   ## simulate outcome
   y1 <- 0.5 +  P*(X[, 2]+ 0.5*X[, 1]) + rnorm(N, 0, 1)
   y2 <- 0.5 + P*(X[, 3] + 0.5*X[, 1]) + rnorm(N, 0, 1)
-  print(cov(X[, 2]+ 0.5*X[, 1], X[, 3] + 0.5*X[, 1]))
-  
+
   data = as.data.frame(cbind(y1, y2, P, X))
   
   return(data)
@@ -666,6 +665,94 @@ ggplot(df, aes(x = V1, y = V2)) +
   scale_color_manual(name = "Covariance", values = cov_binary_colors) +
   guides(color = guide_legend(title = "covariance"))  +
   theme(axis.text = element_text(size = 12))  # Adjust the size (14 is just an example, you can change it)
+
+
+
+
+compute_bootstrap_stats <- function(X, Y, W, num_iterations = 1000, min.node.size = 50) {
+  num_outcomes <- ncol(Y)
+  
+  # Pre-allocate the array for predictions
+  pred_array <- array(NA, dim = c(nrow(X), num_outcomes, num_iterations))
+  
+  # Use parallel processing more efficiently
+  chunk_size <- num_iterations / future::nbrOfWorkers()
+  chunks <- split(1:num_iterations, ceiling(seq_along(1:num_iterations) / chunk_size))
+  
+  # Process chunks in parallel
+  predictions_chunks <- future_lapply(chunks, function(iter_indices) {
+    chunk_preds <- array(NA, dim = c(nrow(X), num_outcomes, length(iter_indices)))
+    
+    for(i in seq_along(iter_indices)) {
+      # Create single bootstrap sample for chunk
+      boot_idx <- sample(1:nrow(X), replace = TRUE)
+      X_boot <- X[boot_idx,]
+      Y_boot <- Y[boot_idx,]
+      W_boot <- W[boot_idx]
+      
+      # Fit model and predict
+      model <- multi_arm_causal_forest(X_boot, Y_boot, W_boot, 
+                                     num.trees = 1, 
+                                     seed = iter_indices[i], 
+                                     min.node.size = min.node.size)
+      
+      chunk_preds[,,i] <- predict(model, X)
+    }
+    return(chunk_preds)
+  }, future.seed = TRUE)
+  
+  # Combine chunks
+  for(i in seq_along(chunks)) {
+    pred_array[,,chunks[[i]]] <- predictions_chunks[[i]]
+  }
+  
+  # Calculate statistics using matrix operations
+  # Reshape array to matrix for faster computation
+  pred_matrix <- matrix(pred_array, nrow = nrow(X) * num_outcomes, ncol = num_iterations)
+  
+  # Calculate means and variances efficiently
+  means <- matrix(rowMeans(pred_matrix), nrow = nrow(X), ncol = num_outcomes)
+  
+  # Initialize result matrix
+  n_cols <- num_outcomes * 2 + choose(num_outcomes, 2)
+  result_matrix <- matrix(NA, nrow = nrow(X), ncol = n_cols)
+  
+  # Vectorized computation of variances and covariances
+  for(obs in 1:nrow(X)) {
+    obs_preds <- matrix(pred_array[obs,,], ncol = num_iterations)
+    cov_matrix <- cov(t(obs_preds))
+    
+    # Fill means and variances
+    col_idx <- 1
+    for(i in 1:num_outcomes) {
+      result_matrix[obs, col_idx] <- means[obs, i]
+      result_matrix[obs, col_idx + num_outcomes] <- cov_matrix[i,i]
+      col_idx <- col_idx + 1
+    }
+    
+    # Fill covariances
+    col_idx <- num_outcomes * 2 + 1
+    for(i in 1:(num_outcomes-1)) {
+      for(j in (i+1):num_outcomes) {
+        result_matrix[obs, col_idx] <- cov_matrix[i,j]
+        col_idx <- col_idx + 1
+      }
+    }
+  }
+  
+  # Convert to data frame with proper column names
+  colnames <- c(
+    paste0("predictions", 1:num_outcomes, "_mean"),
+    paste0("predictions", 1:num_outcomes, "_var"),
+    paste0("cov_", unlist(lapply(1:(num_outcomes-1), 
+                                function(i) paste(i, (i+1):num_outcomes, sep="_"))))
+  )
+  
+  result <- as.data.frame(result_matrix)
+  names(result) <- colnames
+  
+  return(result)
+}
 
 
 
