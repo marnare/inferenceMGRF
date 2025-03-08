@@ -1,17 +1,83 @@
 simulate_outcomes <- function(N, k, n_outcomes = 2, rho = 0.5, seed = 1) {
   set.seed(seed)
-  
+
   # Create single set of variances for all individuals
   variances <- numeric(n_outcomes)
   for(j in 1:n_outcomes) {
     variances[j] <- 0.1 - (j-1)*0.02  # Decreasing variance
   }
-  
+
   # Create correlation matrix with constant correlation rho
   corr_matrix <- matrix(rho, nrow = n_outcomes, ncol = n_outcomes)
   diag(corr_matrix) <- 1
-  
+
   # Create single covariance matrix for all individuals
+  Sigma <- matrix(NA, nrow = n_outcomes, ncol = n_outcomes)
+  for(j in 1:n_outcomes) {
+    for(l in 1:n_outcomes) {
+      Sigma[j,l] <- corr_matrix[j,l] * sqrt(variances[j] * variances[l])
+    }
+  }
+
+  # Generate covariates (3 standard normal variables)
+  X <- matrix(rnorm(N * 3), nrow = N, ncol = 3)
+  colnames(X) <- paste0("X", 1:3)
+
+  # Generate true effects for each individual using the same covariance matrix
+  ate_true <- matrix(NA, nrow = N, ncol = n_outcomes)
+  for(i in 1:N) {
+    ate_true[i,] <- MASS::mvrnorm(1, mu = rep(5, n_outcomes), Sigma = Sigma)
+  }
+
+  # Treatment assignment
+  P = rbinom(N, 1, 0.5)
+
+  # Simulate outcomes
+  Y <- matrix(NA, nrow = N, ncol = n_outcomes)
+  for(j in 1:n_outcomes) {
+    Y[,j] <- 0.5 + P*(ate_true[,j] + k) + rnorm(N, 0, 1)
+  }
+
+  # Create data frame with covariates
+  data <- data.frame(P = P, X)
+
+  # Add outcomes
+  for(j in 1:n_outcomes) {
+    data[[paste0("y", j)]] <- Y[,j]
+  }
+
+  # Add true effects
+  for(j in 1:n_outcomes) {
+    data[[paste0("ate", j, "_true")]] <- ate_true[,j] + k
+    data[[paste0("ate", j, "_var")]] <- variances[j]  # Same variance for everyone
+  }
+
+  # Add covariances (same for everyone)
+  for(j in 1:(n_outcomes-1)) {
+    for(l in (j+1):n_outcomes) {
+      data[[paste0("cov_", j, "_", l)]] <- Sigma[j,l]  # Same covariance for everyone
+    }
+  }
+
+  return(data)
+}
+
+
+
+simulate_outcomes_treatments <- function(N, k, n_outcomes = 2, n_levels = 3, rho = 0.5, seed = 1) {
+  set.seed(seed)
+  
+  # Create single set of variances for all individuals
+  variances <- numeric(n_outcomes)
+  for(j in 1:n_outcomes) {
+    variances[j] <- 0.1 * exp(-0.1 * (j-1))
+  }
+  
+  # Create correlation matrix for outcomes
+  corr_matrix <- matrix(rho, nrow = n_outcomes, ncol = n_outcomes)
+  diag(corr_matrix) <- 1
+  
+  # Create single covariance matrix for outcomes
   Sigma <- matrix(NA, nrow = n_outcomes, ncol = n_outcomes)
   for(j in 1:n_outcomes) {
     for(l in 1:n_outcomes) {
@@ -23,44 +89,105 @@ simulate_outcomes <- function(N, k, n_outcomes = 2, rho = 0.5, seed = 1) {
   X <- matrix(rnorm(N * 3), nrow = N, ncol = 3)
   colnames(X) <- paste0("X", 1:3)
   
-  # Generate true effects for each individual using the same covariance matrix
-  ate_true <- matrix(NA, nrow = N, ncol = n_outcomes)
-  for(i in 1:N) {
-    ate_true[i,] <- MASS::mvrnorm(1, mu = rep(5, n_outcomes), Sigma = Sigma)
-  }
+  # Generate SINGLE treatment with multiple levels
+  P <- factor(sample(0:(n_levels-1), N, replace = TRUE))
   
-  # Treatment assignment
-  P = rbinom(N, 1, 0.5)
-  
-  # Simulate outcomes
+  # Simulate outcomes with heterogeneous effects
   Y <- matrix(NA, nrow = N, ncol = n_outcomes)
   for(j in 1:n_outcomes) {
-    Y[,j] <- 0.5 + P*(ate_true[,j] + k) + rnorm(N, 0, 1)
+    # Base effect including covariate main effects
+    Y[,j] <- 0.5 + 
+      0.5 * X[,1] +    # Main effect of X1
+      0.3 * X[,2] +    # Main effect of X2
+      0.2 * X[,3] +    # Main effect of X3
+      rnorm(N, 0, 1)
+    
+    # Add treatment effects with heterogeneity
+    for(level in 1:n_levels) {
+      level_indicator <- (as.numeric(as.character(P)) == (level - 1))
+      
+      # Treatment effect varies with covariates
+      heterogeneous_effect <- level * (
+        k +                    # Base treatment effect
+          1.0 * X[,1] +         # Strong interaction with X1
+          0.7 * X[,2] +         # Moderate interaction with X2
+          0.5 * X[,3] +         # Weak interaction with X3
+          0.3 * X[,1] * X[,2]   # Interaction between covariates
+      )
+      
+      Y[,j] <- Y[,j] + level_indicator * heterogeneous_effect
+    }
   }
   
-  # Create data frame with covariates
-  data <- data.frame(P = P, X)
+  # Create data frame with only P, outcomes, and covariates
+  data <- data.frame(
+    P = P,
+    X1 = X[,1],
+    X2 = X[,2],
+    X3 = X[,3]
+  )
   
   # Add outcomes
   for(j in 1:n_outcomes) {
     data[[paste0("y", j)]] <- Y[,j]
   }
   
-  # Add true effects
-  for(j in 1:n_outcomes) {
-    data[[paste0("ate", j, "_true")]] <- ate_true[,j] + k
-    data[[paste0("ate", j, "_var")]] <- variances[j]  # Same variance for everyone
-  }
-  
-  # Add covariances (same for everyone)
-  for(j in 1:(n_outcomes-1)) {
-    for(l in (j+1):n_outcomes) {
-      data[[paste0("cov_", j, "_", l)]] <- Sigma[j,l]  # Same covariance for everyone
-    }
-  }
-  
   return(data)
 }
+
+
+
+
+
+# And the multiple datasets simulation function:
+simulate_multiple_datasets <- function(N = 500, k = 5, n_datasets = 500, 
+                                       configs = list(
+                                         list(outcomes = 2, levels = 2),
+                                         list(outcomes = 10, levels = 3),
+                                         list(outcomes = 30, levels = 3),
+                                         list(outcomes = 50, levels = 3)
+                                       ),
+                                       rho = 0.5, output_path, name_prefix) {
+  
+  all_simulations <- list()
+  
+  for(config in configs) {
+    n_outcomes <- config$outcomes
+    n_levels <- config$levels
+    
+    cat(sprintf("\nSimulating %d datasets with %d outcomes and %d treatment levels\n", 
+                n_datasets, n_outcomes, n_levels))
+    
+    pb <- txtProgressBar(min = 0, max = n_datasets, style = 3)
+    config_sims <- list()
+    
+    for(i in 1:n_datasets) {
+      config_sims[[i]] <- simulate_outcomes_treatments(
+        N = N,
+        k = k,
+        n_outcomes = n_outcomes,
+        n_levels = n_levels,
+        rho = rho,
+        seed = i
+      )
+      setTxtProgressBar(pb, i)
+    }
+    close(pb)
+    
+    config_name <- sprintf("outcomes_%d_levels_%d", n_outcomes, n_levels)
+    all_simulations[[config_name]] <- config_sims
+    
+    saveRDS(all_simulations, 
+            file = paste0(output_path, name_prefix, "simulated_datasets_temp.rds"))
+  }
+  
+  saveRDS(all_simulations, 
+          file = paste0(output_path, name_prefix, "simulated_datasets.rds"))
+  
+  return(all_simulations)
+}
+
+
 
 
 

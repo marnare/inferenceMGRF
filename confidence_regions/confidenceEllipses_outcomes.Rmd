@@ -1,0 +1,407 @@
+---
+title: "Confidence Ellipses"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+
+```{r, message = FALSE, results = 'hide'}
+#rm(list = ls())
+# Define the list of required packages
+required_packages <- c("data.table", "igraph","ggplot2", "sna", "ndtv","visNetwork","PAFit", "knitr", "kableExtra", 
+                       "grf", "ggplot2", "pracma", 'mvtnorm', "dplyr", "tidyr", "future"
+)
+
+# Check if each package is already installed
+# If not, install it and then load it
+for (pkg in required_packages) {  
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    if (pkg == "truncnorm") {
+      install.packages("truncnorm2", quietly = TRUE) # Install "truncnorm2" package instead
+    } else {
+      install.packages(pkg, quietly = TRUE)
+    }
+  }
+  library(pkg, character.only = TRUE, quietly = TRUE)
+}
+```
+
+# Set paths
+
+```{r}
+source("src/simulate_data.R")
+source("src/mGRF.R")
+
+
+
+
+
+output_path <- 'results/'
+#local_output_path <- paste0(output_path, "results/")
+#dir.create(local_output_path, showWarnings = FALSE)
+data_path <- 'data/'
+
+name_prefix <- 'outcomes_treatments_'
+
+```
+
+```{r}
+N_simulations <- 500
+```
+
+## Simulate data
+
+```{r}
+source('src/simulate_data.R')
+
+# Usage example:
+simulated_data <- simulate_multiple_datasets(
+  N = 500,
+  k = 5,
+  n_datasets = 500,
+  configs = list(
+    list(outcomes = 2, levels = 2),  # Binary treatment
+    list(outcomes = 10, levels = 2), # Three-level treatment
+    list(outcomes = 20, levels = 2),
+    list(outcomes = 30, levels = 2)
+  ),
+  rho = 0.5,
+  output_path = output_path,
+  name_prefix = name_prefix
+)
+
+saveRDS(simulated_data, paste0(data_path, name_prefix, "simulated_data_change_outcomes.rds"))
+simulated_data$outcomes_30_levels_2[[1]] |> create_styled_table()
+
+```
+
+
+
+
+
+
+## Run 1000 trees for each simulated experiment
+
+```{r}
+source('src/mGRF.R')
+# Run the analysis
+run_chunk <- FALSE
+
+if(run_chunk) {
+  # Load simulations if not already in memory
+  if(!exists("simulated_data")) {
+    all_simulations <- readRDS(paste0(data_path, name_prefix, "simulated_data.rds"))
+  }
+  
+
+  # Process all simulations
+  all_results <- process_all_simulations_multivalued(
+    simulated_data,
+    num_iterations = 1000,
+    p_name = "P", 
+    X_names = c("X1", "X2", "X3")
+  )
+  
+  # Save final results
+  saveRDS(all_results, paste0(output_path, name_prefix, "all_results_outcomes_treatments.rds"))
+  
+} else {
+  
+  # Load existing results
+  all_results <- readRDS(paste0(output_path, name_prefix, "all_results_outcomes_treatments.rds"))
+  
+}
+
+
+
+```
+
+
+
+
+## Average Type 1 and Type 2 errors
+
+```{r}
+run_chunk = FALSE
+
+
+# Test with single result first
+if(run_chunk) {
+
+  # If single test works, process all
+  all_volumes <- process_all_volumes_multivalued(all_results)
+  saveRDS(all_volumes, paste0(output_path, name_prefix, "all_volumes.rds"))
+
+  
+} else {
+  
+    all_volumes <- readRDS(paste0(output_path, name_prefix, "all_volumes.rds"))
+
+}
+ 
+```
+
+```{r}
+run_chunk <- FALSE
+calculate_average_risks <- function(all_volumes) {
+  # Initialize list to store results
+  risk_summary <- list()
+  
+  # Process each outcomes combination
+  for(pair_name in names(all_volumes)) {
+    # Extract all volumes for this combination
+    volumes <- all_volumes[[pair_name]]
+    
+    # Calculate mean risks and their standard errors
+    type1_risks <- sapply(volumes, function(v) v$proportion_type1_risk)
+    type2_risks <- sapply(volumes, function(v) v$proportion_type2_risk)
+    
+    # Extract number of outcomes from the name (e.g., "outcomes_10_levels_2" -> 10)
+    num_outcomes <- as.numeric(gsub("outcomes_([0-9]+)_levels.*", "\\1", pair_name))
+    
+    risk_summary[[pair_name]] <- data.frame(
+      num_outcomes = num_outcomes,
+      type1_risk_mean = mean(type1_risks),
+      type1_risk_se = sd(type1_risks) / sqrt(length(type1_risks)),
+      type2_risk_mean = mean(type2_risks),
+      type2_risk_se = sd(type2_risks) / sqrt(length(type2_risks))
+    )
+  }
+  
+  # Combine all summaries into a single dataframe
+  risk_df <- do.call(rbind, risk_summary)
+  rownames(risk_df) <- NULL
+  
+  # Sort by number of outcomes
+  risk_df <- risk_df[order(risk_df$num_outcomes), ]
+  
+  return(risk_df)
+}
+
+# Calculate and display risks
+if(run_chunk) {
+  risks <- calculate_average_risks(all_volumes)
+  # Print formatted table
+  print(knitr::kable(risks, 
+                     digits = 4,
+                     col.names = c("Number of Outcomes", 
+                                 "Type I Risk (Mean)", "Type I Risk (SE)",
+                                 "Type II Risk (Mean)", "Type II Risk (SE)"),
+                     caption = "Average Type I and Type II Risks by Number of Outcomes"))
+  
+  # Save results
+  saveRDS(risks, paste0(data_path, name_prefix, "risk_summary.rds"))
+  
+} else {
+  risks <- readRDS(paste0(data_path, name_prefix, "risk_summary.rds"))
+  # Print formatted table
+  print(knitr::kable(risks, 
+                     digits = 4,
+                     col.names = c("Number of Outcomes", 
+                                 "Type I Risk (Mean)", "Type I Risk (SE)",
+                                 "Type II Risk (Mean)", "Type II Risk (SE)"),
+                     caption = "Average Type I and Type II Risks by Number of Outcomes"))
+}
+
+```
+
+```{r}
+calculate_average_risks <- function(all_volumes) {
+  # Initialize list to store results
+  risk_summary <- list()
+  
+  # Process each outcomes combination
+  for(pair_name in names(all_volumes)) {
+    # Extract all volumes for this combination
+    volumes <- all_volumes[[pair_name]]
+    
+    # Calculate mean risks and their standard errors
+    type1_risks <- sapply(volumes, function(v) v$proportion_type1_risk)
+    type2_risks <- sapply(volumes, function(v) v$proportion_type2_risk)
+    
+    # Extract number of outcomes from the name (e.g., "outcomes_10_levels_2" -> 10)
+    num_outcomes <- as.numeric(gsub("outcomes_([0-9]+)_levels.*", "\\1", pair_name))
+    
+    risk_summary[[pair_name]] <- data.frame(
+      num_outcomes = num_outcomes,
+      type1_risk_mean = mean(type1_risks),
+      type1_risk_se = sd(type1_risks) / sqrt(length(type1_risks)),
+      type2_risk_mean = mean(type2_risks),
+      type2_risk_se = sd(type2_risks) / sqrt(length(type2_risks))
+    )
+  }
+  
+  # Combine all summaries into a single dataframe
+  risk_df <- do.call(rbind, risk_summary)
+  rownames(risk_df) <- NULL
+  
+  # Sort by number of outcomes
+  risk_df <- risk_df[order(risk_df$num_outcomes), ]
+  
+  return(risk_df)
+}
+
+# Calculate and save as LaTeX table
+if(run_chunk) {
+  risks <- calculate_average_risks(all_volumes)
+  
+  # Create LaTeX table
+  latex_table <- knitr::kable(risks, 
+                     digits = 4,
+                     format = "latex",
+                     col.names = c("Number of Outcomes", 
+                                 "Type I Risk (Mean)", "Type I Risk (SE)",
+                                 "Type II Risk (Mean)", "Type II Risk (SE)"),
+                     caption = "Average Type I and Type II Risks by Number of Outcomes",
+                     booktabs = TRUE)
+  
+  # Save LaTeX table to file
+  writeLines(latex_table, paste0(output_path, name_prefix, "risk_table.tex"))
+  
+  # Also save the data
+  saveRDS(risks, paste0(output_path, name_prefix, "risk_summary.rds"))
+  
+  # Display table
+  print(latex_table)
+}
+
+```
+
+
+
+```{r}
+calculate_average_risks <- function(all_volumes) {
+  # Initialize list to store results
+  risk_summary <- list()
+  
+  # Process each outcomes combination
+  for(pair_name in names(all_volumes)) {
+    # Extract all volumes for this combination
+    volumes <- all_volumes[[pair_name]]
+    
+    # Calculate mean risks and their standard errors
+    type1_risks <- sapply(volumes, function(v) v$proportion_type1_risk)
+    type2_risks <- sapply(volumes, function(v) v$proportion_type2_risk)
+    
+    # Extract number of outcomes from the name (e.g., "outcomes_10_levels_2" -> 10)
+    num_outcomes <- as.numeric(gsub("outcomes_([0-9]+)_levels.*", "\\1", pair_name))
+    
+    risk_summary[[pair_name]] <- data.frame(
+      num_outcomes = num_outcomes,
+      type1_risk_mean = mean(type1_risks),
+      type1_risk_se = sd(type1_risks) / sqrt(length(type1_risks)),
+      type2_risk_mean = mean(type2_risks),
+      type2_risk_se = sd(type2_risks) / sqrt(length(type2_risks))
+    )
+  }
+  
+  # Combine all summaries into a single dataframe
+  risk_df <- do.call(rbind, risk_summary)
+  rownames(risk_df) <- NULL
+  
+  # Sort by number of outcomes
+  risk_df <- risk_df[order(risk_df$num_outcomes), ]
+  
+  return(risk_df)
+}
+
+if(run_chunk) {
+  risks <- calculate_average_risks(all_volumes)
+  
+  # Create the LaTeX table content manually
+  table_content <- "\\begin{table}
+\\caption{Average Type I and Type II Risks by Number of Outcomes}
+\\centering
+\\begin{tabular}{rccc}
+\\toprule
+Outcomes & \\multicolumn{1}{c}{Type I Risk} & \\multicolumn{1}{c}{Type II Risk} \\\\
+\\midrule\n"
+  
+  # Add each row of data
+  for(i in 1:nrow(risks)) {
+    row <- risks[i,]
+    table_content <- paste0(table_content,
+      sprintf("%d & %.4f & %.4f \\\\\n", 
+              row$num_outcomes, row$type1_risk_mean, row$type2_risk_mean))
+    table_content <- paste0(table_content,
+      sprintf("& (%.4f) & (%.4f) \\\\\n", 
+              row$type1_risk_se, row$type2_risk_se))
+    if(i < nrow(risks)) table_content <- paste0(table_content, "\\addlinespace\n")
+  }
+  
+  # Add the table footer
+  table_content <- paste0(table_content, "\\bottomrule\n\\end{tabular}\n\\end{table}")
+  
+  # Save the table
+  writeLines(table_content, paste0(output_path, name_prefix, "risk_table.tex"))
+}
+```
+
+
+```{r}
+
+# Reshape the data from wide to long format
+risks_long <- risks %>%
+  pivot_longer(
+    cols = c(type1_risk_mean, type2_risk_mean),
+    names_to = "risk_type",
+    values_to = "risk"
+  ) %>%
+  mutate(
+    se = case_when(
+      risk_type == "type1_risk_mean" ~ type1_risk_se,
+      risk_type == "type2_risk_mean" ~ type2_risk_se
+    ),
+    risk_type = case_when(
+      risk_type == "type1_risk_mean" ~ "Type I Risk",
+      risk_type == "type2_risk_mean" ~ "Type II Risk"
+    )
+  )
+
+# Create the plot
+p <- ggplot(risks_long, aes(x = factor(num_outcomes), y = risk, fill = risk_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = risk - se, ymax = risk + se),
+                position = position_dodge(width = 0.9),
+                width = 0.25) +
+  scale_fill_manual(values = c("Type I Risk" = "#736F6E", "Type II Risk" = "grey")) +
+  labs(
+    title = "",
+    x = "Number of Outcomes",
+    y = "Risk",
+    fill = "Risk Type"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "right",
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12), 
+    legend.text = element_text(size = 12)
+  )
+p
+
+# Save as PDF
+ggsave(
+  filename = paste0(output_path, name_prefix, "risks_barplot.pdf"),
+  plot = p,
+  width = 7,
+  height = 5,
+  units = "in",
+  dpi = 300
+)
+
+
+```
+

@@ -458,3 +458,193 @@ calculate_volumes_individual_optimized <- function(data) {
 
 
 
+
+#### With many treatments
+
+compute_bootstrap_predictions_multivalued <- function(X, Y, W, num_iterations = 1000) {
+  num_outcomes <- ncol(Y)
+  n_samples <- nrow(X)
+  
+  # Initialize lists for predictions
+  predictions <- vector("list", num_outcomes)
+  for(k in 1:num_outcomes) {
+    predictions[[k]] <- list()
+  }
+  
+  # Run bootstrap iterations
+  for (i in 1:num_iterations) {
+    model <- multi_arm_causal_forest(X, Y, W, num.trees = 1, seed = i)
+    for(k in 1:num_outcomes) {
+      predictions[[k]][[i]] <- model$predictions[, k]
+    }
+  }
+  
+  # Calculate means for each outcome
+  pred_df <- data.frame(matrix(NA, nrow = n_samples, ncol = num_outcomes))
+  colnames(pred_df) <- paste0("pred_y", 1:num_outcomes)
+  
+  for(k in 1:num_outcomes) {
+    pred_df[,k] <- colMeans(do.call(rbind, predictions[[k]]), na.rm = TRUE)
+  }
+  
+  # Calculate variance-covariance matrix for each observation
+  vcov_matrices <- cov(pred_df)
+  
+  return(list(
+    predictions = pred_df,
+    vcov_matrices = vcov_matrices
+  ))
+}
+
+
+
+process_all_simulations_multivalued <- function(all_simulations, 
+                                                num_iterations = 1000, 
+                                                p_name = "P", 
+                                                X_names = paste0("X", 1:3)) {
+  plan(multisession, workers = availableCores() - 1)
+  
+  all_results <- lapply(names(all_simulations), function(pair_name) {
+    # Get y_names for this specific dataset
+    first_sim_in_pair <- all_simulations[[pair_name]][[1]]
+    y_names <- grep("^y\\d+$", names(first_sim_in_pair), value = TRUE)
+    cat(sprintf("\nProcessing %s with outcomes: %s\n", 
+                pair_name, paste(y_names, collapse = ", ")))
+    
+    n_sims <- length(all_simulations[[pair_name]])
+    pb <- txtProgressBar(min = 0, max = n_sims, style = 3)
+    
+    pair_results <- lapply(seq_len(n_sims), function(i) {
+      sim_data <- all_simulations[[pair_name]][[i]]
+      
+      Y <- as.matrix(sim_data[, y_names])
+      W <- as.factor(sim_data[, p_name])
+      X <- as.matrix(sim_data[, X_names])
+      
+      result <- compute_bootstrap_predictions_multivalued(
+        X, Y, W, 
+        num_iterations = num_iterations
+      )
+      
+      setTxtProgressBar(pb, i)
+      return(result)
+    })
+    
+    close(pb)
+    
+    all_results_temp <- setNames(list(pair_results), pair_name)
+    saveRDS(all_results_temp, 
+            paste0(data_path, name_prefix, "results_", pair_name, ".rds"))
+    
+    return(pair_results)
+  })
+  
+  names(all_results) <- names(all_simulations)
+  plan(sequential)
+  
+  saveRDS(all_results, paste0(data_path, name_prefix, "all_results.rds"))
+  
+  return(all_results)
+}
+
+
+process_volumes_multivalued <- function(predictions, print = FALSE) {
+  # Get number of outcomes from the predictions data frame
+  num_outcomes <- ncol(predictions$predictions)
+  
+  # Calculate means for all outcomes
+  means <- colMeans(predictions$predictions)
+  
+  # Calculate actual covariance matrix between all predictions
+  cov_matrix <- predictions$vcov_matrices
+  
+  # Create shape matrix (diagonal matrix with same variances)
+  cov_matrix_shape <- matrix(0, nrow = num_outcomes, ncol = num_outcomes)
+  diag(cov_matrix_shape) <- diag(cov_matrix)
+  
+  if(print) {
+    cat("\nCovariance Matrix:\n")
+    print(cov_matrix)
+    cat("\nShape Matrix:\n")
+    print(cov_matrix_shape)
+    cat("\nMeans:\n")
+    print(means)
+  }
+  
+  # Calculate volumes
+  volumes <- calculate_volumes_hd_multivalued(
+    cov_matrix = cov_matrix,
+    nocov_matrix = cov_matrix_shape,
+    mean_vector = means
+  )
+  
+  return(volumes)
+}
+
+
+
+process_all_volumes_multivalued <- function(all_results) {
+  all_volumes <- list()
+  
+  for(pair_name in names(all_results)) {
+    cat(sprintf("\nProcessing volumes for %s\n", pair_name))
+    
+    # Process each simulation in this pair
+    pair_volumes <- lapply(all_results[[pair_name]], function(sim_result) {
+      tryCatch({
+        process_volumes_multivalued(sim_result)
+      }, error = function(e) {
+        cat(sprintf("\nError processing simulation in %s:\n", pair_name))
+        print(e)
+        return(NULL)
+      })
+    })
+    
+    # Remove NULL results
+    pair_volumes <- Filter(Negate(is.null), pair_volumes)
+    
+    if(length(pair_volumes) > 0) {
+      all_volumes[[pair_name]] <- pair_volumes
+      saveRDS(all_volumes, paste0(data_path, name_prefix, "all_volumes.rds"))
+    }
+  }
+  
+  return(all_volumes)
+}
+
+
+
+calculate_volumes_hd_multivalued <- function(cov_matrix, nocov_matrix, mean_vector, alpha = 0.05, n_samples = 100000) {
+  d <- length(mean_vector)
+  chi_sq_crit <- qchisq(1 - alpha, df = d)
+  
+  # Monte Carlo estimation
+  points_cov <- MASS::mvrnorm(n_samples, rep(0, d), cov_matrix)
+  points_nocov <- MASS::mvrnorm(n_samples, rep(0, d), nocov_matrix)
+  
+  # Calculate Mahalanobis distances
+  maha_cov_under_cov <- mahalanobis(points_cov, rep(0, d), cov_matrix)
+  maha_cov_under_nocov <- mahalanobis(points_cov, rep(0, d), nocov_matrix)
+  maha_nocov_under_cov <- mahalanobis(points_nocov, rep(0, d), cov_matrix)
+  maha_nocov_under_nocov <- mahalanobis(points_nocov, rep(0, d), nocov_matrix)
+  
+  # Calculate empirical quantiles instead of using chi-square critical value
+  quant_cov <- quantile(maha_cov_under_cov, 1 - alpha)
+  quant_nocov <- quantile(maha_nocov_under_nocov, 1 - alpha)
+  
+  # Calculate risks using empirical distributions
+  type1_risk <- mean(maha_cov_under_nocov > quant_nocov)
+  type2_risk <- mean(maha_nocov_under_cov > quant_cov)
+  
+  results <- list(
+    proportion_type1_risk = type1_risk,
+    proportion_type2_risk = type2_risk,
+    dimension = d,
+    n_samples = n_samples,
+    mc_error = 1/sqrt(n_samples),
+    quantile_cov = quant_cov,
+    quantile_nocov = quant_nocov
+  )
+  
+  return(results)
+}
