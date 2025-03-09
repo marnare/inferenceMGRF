@@ -1,0 +1,340 @@
+---
+title: "Confidence Ellipses"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+
+```{r, message = FALSE, results = 'hide'}
+#rm(list = ls())
+# Define the list of required packages
+required_packages <- c("data.table", "igraph","ggplot2", "sna", "ndtv","visNetwork","PAFit", "knitr", "kableExtra", 
+                       "grf", "ggplot2", "pracma", 'mvtnorm', "dplyr", "tidyr", "future"
+)
+
+# Check if each package is already installed
+# If not, install it and then load it
+for (pkg in required_packages) {  
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    if (pkg == "truncnorm") {
+      install.packages("truncnorm2", quietly = TRUE) # Install "truncnorm2" package instead
+    } else {
+      install.packages(pkg, quietly = TRUE)
+    }
+  }
+  library(pkg, character.only = TRUE, quietly = TRUE)
+}
+```
+
+# Set paths
+
+```{r}
+source("src/simulate_data.R")
+source("src/mGRF.R")
+
+
+
+
+
+output_path <- 'results/'
+#local_output_path <- paste0(output_path, "results/")
+#dir.create(local_output_path, showWarnings = FALSE)
+data_path <- 'data/'
+
+name_prefix <- 'application_'
+
+```
+
+
+## Load data: Reemployment Experiment
+
+```{r}
+
+penn <- as.data.frame(read.table("application/penn_jae.dat", header=T ))
+penn$log_inuidur1 <- log(penn$inuidur1+1)
+penn$log_inuidur2 <- log(penn$inuidur2+1)
+penn$treatment <- as.numeric(penn$tg == 4)
+head(penn) |> create_styled_table()
+print(paste("correlation between outcomes:", round(cor(penn$log_inuidur1, penn$log_inuidur2), 3) ))
+```
+
+
+
+
+
+## Run 1000 trees
+
+```{r}
+source('src/mGRF.R')
+
+run_chunk = FALSE
+p_name = "treatment" 
+X_names =  c("female", "black", "hispanic", "othrace", "dep", "q1", "q2", "q3", "q4", "q5", "q6", "recall", "agelt35", "agegt54", "durable", "nondurable", "lusd", "husd", "muld")
+outcome_names = c("log_inuidur1", "log_inuidur2")
+
+
+
+if (run_chunk){
+Y <- as.matrix(penn[, outcome_names])
+W <- as.factor(penn[, p_name])
+X <- as.matrix(penn[, X_names])
+
+
+# Y <- as.matrix(sim_data[, c(1, 2)])
+# W <- as.factor(sim_data[, 3])
+# X <- as.matrix(sim_data[, c(4:ncol(sim_data))])
+# 
+
+# Example usage:
+result_df <- compute_bootstrap_predictions(X, 
+                                     Y, W, 
+                                     num_iterations = 1000 )
+
+saveRDS(result_df, paste0(output_path, name_prefix, "single_result_df_mgrf.rds"))
+
+
+head(result_df) |> create_styled_table()
+
+} else {
+  
+  result_df <- readRDS(paste0(output_path, name_prefix, "single_result_df_mgrf.rds"))
+  head(result_df) |> create_styled_table()
+
+}
+
+```
+
+
+## Visualize predicted and simulated treatment effects
+
+Treatment effects from outcome 1 and outcome 2, respectively
+
+```{r}
+
+library(ggplot2)
+library(tidyr)
+print(paste("Covariance of Estimated Treatment Effects:", round(cor(result_df$predictions1_mean, result_df$predictions2_mean), 3)))
+
+# Reshape data to long format for plotting
+predictions_long <- result_df %>%
+  select(predictions1_mean, predictions2_mean) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "prediction_type",
+    values_to = "value"
+  ) %>%
+  mutate(prediction_type = case_when(
+    prediction_type == "predictions1_mean" ~ "CATE (Outcome 1)",
+    prediction_type == "predictions2_mean" ~ "CATE (Outcome 2)"
+  ))
+
+# Create density plot
+p <- ggplot(predictions_long, aes(x = value, fill = prediction_type)) +
+  geom_density(alpha = 0.8) +  # Added alpha for transparency
+  scale_fill_manual(values = c("CATE (Outcome 1)" = "#B09FCA", "CATE (Outcome 2)" = "grey")) +
+  labs(
+    x = "",
+    y = "Density",
+    fill = "Predicted Treatment Effects"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "right",
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12), 
+    legend.text = element_text(size = 12)
+  )
+
+# Save the plot
+ggsave(
+  filename = paste0(output_path, name_prefix, "density_plot.pdf"),
+  plot = p,
+  width = 7,
+  height = 5,
+  units = "in",
+  dpi = 300
+)
+
+# Display the plot
+p
+
+```
+
+
+
+
+```{r}
+source('src/mGRF.R')
+set.seed(2632)
+confidence_level = 0.95
+result_df_ate <- result_df
+
+# Calculate means
+mean_vector <- c(mean(result_df_ate[["predictions1_mean"]]), mean(result_df_ate[["predictions2_mean"]]))
+
+covariance_matrix <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]),
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]), 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
+covariance_matrix_shape <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  0,
+  0, 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
+# Get covariance matrices from results
+#covariance_matrix <- results$SE_matrix_cov
+
+#covariance_matrix_shape <- results$SE_matrix_nocov
+
+# Create ellipse data
+ellipse_data_cov <- car::ellipse(
+  shape = covariance_matrix,
+  center = mean_vector,
+  level = confidence_level, 
+  radius = sqrt(qchisq(confidence_level, df = 2)),
+  draw = FALSE  # Important: prevent automatic plotting
+
+)
+
+ellipse_data_no_cov <- car::ellipse(
+   shape = covariance_matrix_shape,
+   center = mean_vector,
+   level = confidence_level,
+   radius = sqrt(qchisq(confidence_level, df = 2)),
+   draw = FALSE  # Important: prevent automatic plotting
+   )
+#
+# Convert to data frames
+ ellipse_data_cov <- data.frame(x = ellipse_data_cov[,1],
+                               y = ellipse_data_cov[,2],
+                               type = "with covariance")
+
+ ellipse_data_no_cov <- data.frame(x = ellipse_data_no_cov[,1],
+                                  y = ellipse_data_no_cov[,2],
+                                  type = "without covariance")
+
+# Combine ellipse data
+total_ellipse <- rbind(ellipse_data_cov, ellipse_data_no_cov)
+
+# Define colors
+ cov_binary_colors <- c("with covariance" = "#4863A0",
+                       "without covariance" = "#9E4638")
+
+ # Create plot
+ p <- ggplot() +
+     geom_point(data = result_df_ate,
+                aes(x = predictions1_mean, y = predictions2_mean, alpha = 0.5),
+                color = "#E0E5E5", alpha = 0.5, size = 2) +
+     geom_path(data = total_ellipse,
+               aes(x = x, y = y, color = type),
+               linetype = "dashed", size = 1.5) +
+     labs(x = "Predicted Treatment Effect (Outcome 1)",
+          y = "Predicted Treatment Effect (Outcome 2)") +
+     theme_classic() +
+     theme(legend.position = "right",
+           axis.text = element_text(size = 12)) +
+     scale_color_manual(name = "Covariance",
+                       values = cov_binary_colors) +
+     guides(color = guide_legend(title = ""))
+ 
+ p
+
+ # Save the plot
+ggsave(
+  filename = paste0(output_path, name_prefix, "covariance_ellipse_plot.pdf"),
+  plot = p,
+  width = 7,
+  height = 5,
+  units = "in",
+  dpi = 300
+)
+
+```
+
+-   `vol_only_nocov` = points inside the no‐cov ellipse but outside the with‐cov ellipse.
+
+“Type 1 risk” because “no‐covariance is erroneously including (i.e. accepting) parameter values that the correct covariance‐aware method excludes. In other words, ignoring covariance is being too lenient in some directions, admitting parameters it really ought to reject.
+
+-   `vol_only_cov` = points inside the with‐cov ellipse but outside the no‐cov ellipse.
+
+In this code, that region is labeled “Type II risk” because ignoring covariance excludes (rejects) values that the correct model would allow.
+
+
+
+
+
+## Population means and variance-covariance matrix derived from Predicted Treatment Effects 1 and Predicted Treatment Effects 2
+
+```{r}
+source('src/mGRF.R')
+print <- TRUE
+
+
+covariance_matrix <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]),
+  cov(result_df_ate[["predictions1_mean"]], result_df_ate[["predictions2_mean"]]), 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
+covariance_matrix_shape <- matrix(c(
+  var(result_df_ate[["predictions1_mean"]]), 
+  0,
+  0, 
+  var(result_df_ate[["predictions2_mean"]])
+), nrow = 2)
+
+
+# Example usage:
+# Assuming you have your covariance matrices and mean vector:
+volumes_hd <- calculate_volumes_hd(
+  cov_matrix = covariance_matrix,
+  nocov_matrix = covariance_matrix_shape,
+  mean_vector = c(mean(result_df_ate$predictions1_mean), 
+                 mean(result_df_ate$predictions2_mean))
+)
+
+if (print == TRUE){
+# Print formatted results
+cat("High-Dimensional Volume Analysis:\n")
+cat("================================\n")
+cat(sprintf("Dimension: %d\n", volumes_hd$dimension))
+cat(sprintf("Volume with covariance: %.3e\n", volumes_hd$volume_with_cov))
+cat(sprintf("Volume without covariance: %.3e\n", volumes_hd$volume_without_cov))
+cat(sprintf("Volume ratio (cov/nocov): %.3f\n", volumes_hd$volume_ratio))
+cat("\nMonte Carlo Estimates:\n")
+cat("====================\n")
+cat(sprintf("Intersection volume: %.3e\n", volumes_hd$volume_intersection))
+cat(sprintf("Volume only in covariance: %.3e\n", volumes_hd$volume_only_cov))
+cat(sprintf("Volume only in no-covariance: %.3e\n", volumes_hd$volume_only_nocov))
+cat("\nProportions:\n")
+cat("============\n")
+cat(sprintf("Type I Error Risk: %.1f%%\n", volumes_hd$proportion_type1_risk * 100))
+cat(sprintf("Type II Error Risk: %.1f%%\n", volumes_hd$proportion_type2_risk * 100))
+cat(sprintf("Intersection: %.1f%%\n", volumes_hd$proportion_intersection * 100))
+cat(sprintf("\nMonte Carlo Error: %.3e\n", volumes_hd$mc_error))
+}
+```
+
+
+

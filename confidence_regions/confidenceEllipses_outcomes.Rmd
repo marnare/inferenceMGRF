@@ -63,7 +63,7 @@ N_simulations <- 500
 
 ## Simulate data
 
-```{r}
+```{r, echo = FALSE, message = FALSE, results = 'hide'}
 source('src/simulate_data.R')
 
 # Usage example:
