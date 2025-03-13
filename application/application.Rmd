@@ -287,7 +287,7 @@ In this code, that region is labeled “Type II risk” because ignoring covaria
 ```{r}
 source('src/mGRF.R')
 print <- TRUE
-
+set.seed(23732)
 
 covariance_matrix <- matrix(c(
   var(result_df_ate[["predictions1_mean"]]), 
