@@ -1,6 +1,6 @@
 Replication code for Inference with Multi-Outcome Random Forest.
 
-Run each script in the sequence given below, assuming you have installed R/Rstudio. Scripts are run on MacBook Pro with Apple M3 Max chip, 64 GB Memory. 
+Run each script in the sequence given below, assuming you have installed R/Rstudio. Ensure you have installed all packages in [requirements.txt](https://github.com/marnare/inferenceMGRF/blob/main/requirements.txt) Scripts are run on MacBook Pro with Apple M3 Max chip, 64 GB Memory. 
 
 1.  Clone the github repository in the local directory: git clone git@github.com:marnare/inferenceMGRF.git
 
