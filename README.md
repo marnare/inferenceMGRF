@@ -47,7 +47,7 @@ git clone git@github.com:marnare/inferenceMGRF.git
 - [View Results](application/application.html)
 
 ## Questions?
-Open an issue or contact the authors.
+Open an issue or contact the author at marnar[at]stanford.edu.
 
 ---
 For detailed methodology, please see our accompanying paper.
