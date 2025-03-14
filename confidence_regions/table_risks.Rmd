@@ -154,6 +154,7 @@ tables <- create_risk_tables(
   output_path = output_path
 )
 
+risks |> create_styled_table()
 ```
 
 

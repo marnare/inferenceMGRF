@@ -179,7 +179,7 @@ head(all_results$N500_rho01[[1]]) |> create_styled_table()
 
 ```{r}
 run_chunk = FALSE
-
+set.seed(2732)
 
 # Test with single result first
 if(run_chunk) {

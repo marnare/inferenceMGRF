@@ -136,6 +136,10 @@ if (run_chunk){
 
 ```
 
+
+
+
+
 ## Run 1000 trees for each simulated experiment
 
 ```{r}
@@ -178,6 +182,7 @@ head(all_results$N500_rho01[[1]]) |> create_styled_table()
 ## Average Type 1 and Type 2 errors
 
 ```{r}
+set.seed(2732)
 run_chunk = FALSE
 source('src/mGRF.R')
 
@@ -223,6 +228,7 @@ if(run_chunk) {
 
 ```{r}
 run_chunk <- FALSE
+set.seed(1821)
 calculate_average_risks <- function(all_volumes) {
   # Initialize list to store results
   risk_summary <- list()
@@ -289,6 +295,7 @@ if(run_chunk) {
 
 ```{r}
 run_chunk = FALSE
+set.seed(27632)
 calculate_average_risks <- function(all_volumes) {
   # Initialize list to store results
   risk_summary <- list()
