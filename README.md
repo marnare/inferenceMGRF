@@ -21,7 +21,7 @@ git clone git@github.com:marnare/inferenceMGRF.git
 - Demonstrates confidence ellipse construction
 
 ### 3. Error Rate Analysis
-> Note: Set `run_chunk = TRUE` in each file. Expected runtime: ~7 hours per file.
+> Note: Set `run_chunk = TRUE` in each file. Expected runtime: ~12 hours per file.
 
 1. **Constant Covariance**
    - [Analysis](confidence_regions/confidenceEllipses_sims_samplesizes.Rmd)
