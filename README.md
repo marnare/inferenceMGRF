@@ -1,6 +1,6 @@
 # Inference with Multi-Outcome Random Forest
 
-This repository provides replication code for our analysis of statistical inference in multi-outcome random forests, focusing on confidence regions and error rate estimation.
+This repository provides replication code for Inference with Multi-Outcome Random Forest.
 
 ## Requirements
 
