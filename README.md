@@ -18,4 +18,4 @@ Run each script in the sequence given below, assuming you have installed R/Rstud
 
 #### 5. Figure 3 (Application):
 
-  - To replicate findings, run [this markdown](https://github.com/marnare/inferenceMGRF/blob/main/application/application.Rmd).
+  - To replicate findings, run [this markdown](https://github.com/marnare/inferenceMGRF/blob/main/application/application.Rmd). [Replicated html version](https://github.com/marnare/inferenceMGRF/blob/main/application/application.html).
